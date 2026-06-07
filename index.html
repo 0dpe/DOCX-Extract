@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DOCX Extract</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background: #f2f0eb;
+            color: #1c1c1c;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        .card {
+            background: #fff;
+            border: 1px solid #d8d5ce;
+            padding: 2.5rem;
+            max-width: 460px;
+            width: 100%;
+        }
+
+        h1 {
+            font-size: 0.7rem;
+            font-weight: 500;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: #999;
+            margin-bottom: 0.4rem;
+        }
+
+        .subtitle {
+            font-size: 0.75rem;
+            color: #bbb;
+            margin-bottom: 2rem;
+        }
+
+        .drop-zone {
+            border: 1.5px dashed #ccc;
+            padding: 2.5rem 1.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+            user-select: none;
+        }
+
+        .drop-zone:hover,
+        .drop-zone.drag-over {
+            border-color: #1c1c1c;
+            background: #fafaf8;
+        }
+
+        .drop-zone input {
+            display: none;
+        }
+
+        .drop-zone-label {
+            font-size: 0.78rem;
+            color: #999;
+            line-height: 1.8;
+        }
+
+        .drop-zone-label strong {
+            color: #444;
+            font-weight: 500;
+        }
+
+        #filename {
+            font-size: 0.75rem;
+            color: #888;
+            margin-top: 1.2rem;
+            min-height: 1.1em;
+        }
+
+        #status {
+            font-size: 0.75rem;
+            margin-top: 0.5rem;
+            min-height: 1.1em;
+            color: #888;
+        }
+
+        #status.error {
+            color: #c0392b;
+        }
+
+        #status.success {
+            color: #2e7d32;
+        }
+
+        #preview {
+            display: none;
+            margin-top: 1.2rem;
+            background: #fafaf8;
+            border: 1px solid #e8e5de;
+            padding: 0.9rem 1rem;
+            font-size: 0.7rem;
+            line-height: 1.9;
+            max-height: 180px;
+            overflow-y: auto;
+            color: #666;
+            white-space: pre;
+        }
+
+        #downloadBtn {
+            display: none;
+            margin-top: 1rem;
+            width: 100%;
+            padding: 0.75rem;
+            background: #1c1c1c;
+            color: #fff;
+            border: none;
+            font-family: inherit;
+            font-size: 0.75rem;
+            letter-spacing: 0.08em;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        #downloadBtn:hover {
+            background: #444;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="card">
+        <h1>DOCX Extract</h1>
+        <p class="subtitle">Heading 2 + Quote → references</p>
+
+        <div class="drop-zone" id="dropZone">
+            <input type="file" id="fileInput" accept=".docx" />
+            <div class="drop-zone-label">
+                <strong>Click to upload</strong> or drag &amp; drop<br>.docx files only
+            </div>
+        </div>
+
+        <div id="filename"></div>
+        <div id="status"></div>
+        <div id="preview"></div>
+        <button id="downloadBtn">↓ download output.txt</button>
+    </div>
+
+    <script>
+        // ─── DOCX parsing helpers ───────────────────────────────────────────────
+
+        const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+
+        // Get all descendant elements by local name (namespace-aware + prefix fallback)
+        function wEls(parent, localName) {
+            const r = Array.from(parent.getElementsByTagNameNS(W_NS, localName));
+            return r.length ? r : Array.from(parent.getElementsByTagName('w:' + localName));
+        }
+
+        // Get a w: attribute from an element
+        function wAttr(el, localName) {
+            let v = el.getAttribute('w:' + localName);
+            if (v !== null) return v;
+            v = el.getAttributeNS(W_NS, localName);
+            if (v !== null) return v;
+            return el.getAttribute(localName);
+        }
+
+        async function extractVerses(file) {
+            const buffer = await file.arrayBuffer();
+            const zip = await JSZip.loadAsync(buffer);
+
+            // 1. Build styleId → styleName map from word/styles.xml
+            const styleMap = {};
+            const stylesEntry = zip.file('word/styles.xml');
+            if (stylesEntry) {
+                const xml = await stylesEntry.async('string');
+                const doc = new DOMParser().parseFromString(xml, 'application/xml');
+                for (const styleEl of wEls(doc, 'style')) {
+                    const id = wAttr(styleEl, 'styleId');
+                    const nameEl = wEls(styleEl, 'name')[0];
+                    if (id && nameEl) {
+                        const val = wAttr(nameEl, 'val');
+                        if (val) styleMap[id] = val;
+                    }
+                }
+            }
+
+            // 2. Parse word/document.xml
+            const docXml = await zip.file('word/document.xml').async('string');
+            const docDom = new DOMParser().parseFromString(docXml, 'application/xml');
+
+            // Same regex as the Python script
+            const versePattern = /^([\u4e00-\u9fa5]+\s*\d+[:：][\d\-,]+)/;
+
+            let currentHeading = '';
+            const lines = [];
+
+            for (const para of wEls(docDom, 'p')) {
+                // Determine paragraph style
+                let styleId = '';
+                let styleName = '';
+                const pPr = wEls(para, 'pPr')[0];
+                if (pPr) {
+                    const pStyle = wEls(pPr, 'pStyle')[0];
+                    if (pStyle) {
+                        styleId = wAttr(pStyle, 'val') || '';
+                        styleName = styleMap[styleId] || styleId;
+                    }
+                }
+
+                // Collect all run text (handles hyperlinks, etc.)
+                let text = '';
+                for (const r of wEls(para, 'r')) {
+                    for (const t of wEls(r, 't')) {
+                        text += t.textContent;
+                    }
+                }
+                text = text.trim();
+                if (!text) continue;
+
+                const sn = styleName.toLowerCase();
+                const si = styleId.toLowerCase();
+
+                // Mirror the Python logic exactly
+                if (sn === 'heading 2' || si === 'heading2') {
+                    const chinese = text.match(/[\u4e00-\u9fa5]+/g);
+                    if (chinese) currentHeading = chinese.join('');
+
+                } else if (sn === 'quote' || si === 'quote') {
+                    if (currentHeading) {
+                        const match = versePattern.exec(text);
+                        if (match) {
+                            const ref = match[1].replace('：', ':');
+                            lines.push(`${currentHeading} ${ref}`);
+                        }
+                    }
+                }
+            }
+
+            return lines.join('\n');
+        }
+
+        // ─── UI ────────────────────────────────────────────────────────────────
+
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const filename = document.getElementById('filename');
+        const status = document.getElementById('status');
+        const preview = document.getElementById('preview');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        let outputContent = '';
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+        dropZone.addEventListener('drop', e => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            const f = e.dataTransfer.files[0];
+            if (f) handleFile(f);
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files[0]) handleFile(fileInput.files[0]);
+        });
+
+        async function handleFile(file) {
+            if (!file.name.toLowerCase().endsWith('.docx')) {
+                setStatus('error', 'Please upload a .docx file.');
+                return;
+            }
+
+            filename.textContent = file.name;
+            setStatus('', 'Processing…');
+            downloadBtn.style.display = 'none';
+            preview.style.display = 'none';
+            outputContent = '';
+
+            try {
+                outputContent = await extractVerses(file);
+                const count = outputContent ? outputContent.split('\n').filter(Boolean).length : 0;
+
+                if (count === 0) {
+                    setStatus('error', 'No verses found. Check Heading 2 + Quote styles.');
+                } else {
+                    setStatus('success', `${count} reference${count !== 1 ? 's' : ''} found.`);
+                    preview.textContent = outputContent;
+                    preview.style.display = 'block';
+                    downloadBtn.style.display = 'block';
+                }
+            } catch (err) {
+                setStatus('error', 'Parse error: ' + err.message);
+                console.error(err);
+            }
+        }
+
+        function setStatus(type, msg) {
+            status.className = type;
+            status.textContent = msg;
+        }
+
+        downloadBtn.addEventListener('click', () => {
+            const blob = new Blob([outputContent], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'output.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+    </script>
+</body>
+
+</html>
