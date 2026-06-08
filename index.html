@@ -117,10 +117,14 @@
             white-space: pre;
         }
 
-        #downloadBtn {
+        #buttonContainer {
             display: none;
             margin-top: 1rem;
-            width: 100%;
+            gap: 0.75rem;
+        }
+
+        .btn {
+            flex: 1;
             padding: 0.75rem;
             background: #1c1c1c;
             color: #fff;
@@ -132,7 +136,7 @@
             transition: background 0.15s;
         }
 
-        #downloadBtn:hover {
+        .btn:hover {
             background: #444;
         }
     </style>
@@ -153,7 +157,10 @@
         <div id="filename"></div>
         <div id="status"></div>
         <div id="preview"></div>
-        <button id="downloadBtn">↓ download output.txt</button>
+        <div id="buttonContainer">
+            <button id="clipboardBtn" class="btn">📋 copy to clipboard</button>
+            <button id="downloadBtn" class="btn">↓ download output.txt</button>
+        </div>
     </div>
 
     <script>
@@ -200,8 +207,7 @@
             const docXml = await zip.file('word/document.xml').async('string');
             const docDom = new DOMParser().parseFromString(docXml, 'application/xml');
 
-            // Same regex as the Python script
-            const versePattern = /^([\u4e00-\u9fa5]+\s*\d+[:：][\d\-,]+)/;
+            const versePattern = /^([\u4e00-\u9fa5]+\s*\d+[:：][\d\-,]+[a-c]?)/;
 
             let currentHeading = '';
             const lines = [];
@@ -258,6 +264,8 @@
         const filename = document.getElementById('filename');
         const status = document.getElementById('status');
         const preview = document.getElementById('preview');
+        const buttonContainer = document.getElementById('buttonContainer');
+        const clipboardBtn = document.getElementById('clipboardBtn');
         const downloadBtn = document.getElementById('downloadBtn');
 
         let outputContent = '';
@@ -283,7 +291,7 @@
 
             filename.textContent = file.name;
             setStatus('', 'Processing…');
-            downloadBtn.style.display = 'none';
+            buttonContainer.style.display = 'none';
             preview.style.display = 'none';
             outputContent = '';
 
@@ -297,7 +305,7 @@
                     setStatus('success', `${count} reference${count !== 1 ? 's' : ''} found.`);
                     preview.textContent = outputContent;
                     preview.style.display = 'block';
-                    downloadBtn.style.display = 'block';
+                    buttonContainer.style.display = 'flex';
                 }
             } catch (err) {
                 setStatus('error', 'Parse error: ' + err.message);
@@ -309,6 +317,16 @@
             status.className = type;
             status.textContent = msg;
         }
+
+        clipboardBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(outputContent);
+                setStatus('success', 'Copied to clipboard!');
+                setTimeout(() => setStatus('success', `${outputContent.split('\n').filter(Boolean).length} reference${outputContent.split('\n').filter(Boolean).length !== 1 ? 's' : ''} found.`), 2000);
+            } catch (err) {
+                setStatus('error', 'Failed to copy: ' + err.message);
+            }
+        });
 
         downloadBtn.addEventListener('click', () => {
             const blob = new Blob([outputContent], { type: 'text/plain;charset=utf-8' });
